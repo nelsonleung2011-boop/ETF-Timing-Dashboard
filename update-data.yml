@@ -1,0 +1,58 @@
+name: Update Market Data
+
+# Epic 1.2 — scheduled + manual data refresh committed back to the repo.
+# The browser NEVER calls Yahoo; it only reads the JSON committed here.
+
+on:
+  schedule:
+    # 05:30 UTC = 01:30 ET, after US market close + Yahoo settlement (~1h).
+    - cron: '30 5 * * 1-5'
+  workflow_dispatch:   # manual trigger from the Actions tab
+
+permissions:
+  contents: write
+
+concurrency:
+  group: market-data
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pandas numpy
+
+      - name: 1. Fetch market data (Yahoo primary, Stooq fallback)
+        run: python pipeline/fetch_market_data.py
+
+      - name: 2. Validate data quality (Epic 2)
+        run: python pipeline/validate_data.py
+
+      - name: 3. Build JSON datasets + score/sector/backtest engines
+        run: python pipeline/build_market_data.py
+
+      - name: 4. Rebuild standalone dashboard HTML (data already built)
+        run: python build_dashboard.py
+        env:
+          SKIP_PIPELINE: '1'
+
+      - name: Commit updated data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/ dashboard_data.json index.html ETF_Timing_Dashboard.html
+          if git diff --cached --quiet; then
+            echo "No data changes to commit."
+          else
+            git commit -m "chore: refresh market data $(date -u +%Y-%m-%d)"
+            git push
+          fi
